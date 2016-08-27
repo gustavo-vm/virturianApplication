@@ -1,29 +1,68 @@
-import pandas, numpy
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.ensemble import RandomForestClassifier
-from sklearn import metrics
+import pandas, numpy, statistics
+from sklearn import metrics, svm, feature_selection, cross_validation
 
 
 def main():
     considerNoise = True
+    enableFS = False
 
     waveDataRaw = loadWaveData(considerNoise)
 
-    trainIndex = numpy.random.rand(len(waveDataRaw)) < 0.7
+    f1_scoreList = []
 
+    for x in range(10):
+
+        waveTestSet, waveTrainSet = generateTrainAndTestSets(waveDataRaw)
+
+        model = createClassifier()
+
+        featuresName = selectFeatures(waveTrainSet, model, enableFS)
+
+        model = trainClassifier(waveTrainSet, featuresName, model)
+
+        result, f1_score = classifyAndEvaluate(model, waveTestSet, featuresName)
+
+        f1_scoreList.append(f1_score)
+
+    print("mean: ", statistics.mean(f1_scoreList))
+    print("sda: ", statistics.stdev(f1_scoreList))
+
+
+def createClassifier():
+
+    model = svm.SVC(kernel="linear")
+
+    return model
+
+def generateTrainAndTestSets(waveDataRaw):
+    #Generate random trainig and test sets with 70% and 30% of data
+
+    trainIndex = numpy.random.rand(len(waveDataRaw)) < 0.7
     waveTrainSet = waveDataRaw[trainIndex]
     waveTestSet = waveDataRaw[~trainIndex]
+    return waveTestSet, waveTrainSet
 
-    featuresName = selectFeatures(waveTrainSet)
 
-    model = createAndTrainClassifier(waveTrainSet, featuresName)
-
-    classifyAndEvaluate(model, waveTestSet, featuresName)
-
-def selectFeatures(waveTrainSet):
+def selectFeatures(waveTrainSet, model, enableFS):
+    setLen = len(waveTrainSet.columns)
 
     featuresName = list(waveTrainSet.columns.values)
-    featuresName = featuresName[:len(featuresName) - 2]
+    featuresName = featuresName[:setLen - 2]
+
+    if enableFS:
+
+        #Recursive feature selection
+
+        recursiveFS = feature_selection.RFECV(estimator=model, step=1, cv=cross_validation.StratifiedKFold(waveTrainSet.ix[:, setLen-1], 2),
+                      scoring='f1_weighted')
+        recursiveFS.fit(waveTrainSet[featuresName], waveTrainSet.ix[:, setLen-1])
+
+        #Get all features names ranked as 1
+
+        featuresName = list(map(lambda x: x[1],filter(lambda x: x[0]==1,zip(recursiveFS.ranking_, featuresName))))
+
+        print("Selected features:")
+        print(featuresName)
 
     return featuresName
 
@@ -32,19 +71,18 @@ def classifyAndEvaluate(model, waveTestSet, featuresName):
 
     result = list(model.predict(waveTestSet[featuresName]))
 
+    print("Result:")
     print(metrics.classification_report(waveTestSet.ix[:, setLen - 1], result))
 
+    return result, metrics.f1_score(waveTestSet.ix[:, setLen - 1], result)
 
-def createAndTrainClassifier(waveTrainSet, featuresName):
+
+def trainClassifier(waveTrainSet, featuresName, model):
     setLen = len(waveTrainSet.columns)
 
-    RFModel = RandomForestClassifier(n_estimators=100)
-    RFModel.fit(waveTrainSet[featuresName], waveTrainSet.ix[:, setLen-1])
+    model.fit(waveTrainSet[featuresName], waveTrainSet.ix[:, setLen-1])
 
-    print("Features by importance:")
-    print(sorted(zip(map(lambda x: round(x, 4), RFModel.feature_importances_), featuresName),reverse=True))
-
-    return RFModel
+    return model
 
 
 def loadWaveData(considerNoise):
